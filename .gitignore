@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+~$*.docx
+*.csv
+.face_landmarker*

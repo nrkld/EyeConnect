@@ -1,0 +1,5 @@
+# Raspberry Pi 4B: ставить строго эти версии (TFLite CPU, solutions API)
+opencv-python==4.8.1.78
+numpy==1.26.4
+scikit-learn==1.3.2
+mediapipe==0.10.14
