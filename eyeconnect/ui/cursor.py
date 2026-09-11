@@ -60,12 +60,18 @@ def save_profile(reg, W, H, tracker="facemesh"):
 
 def fullscreen_calibrate(cam, tracker, filt, tracker_name="facemesh", avg_s=None,
                          grid=None, dwell_s=None, wait=True):
-    """Калибровка serpentine на весь экран (дефолт 10x5=50). Возвращает (reg, W, H)."""
+    """Калибровка serpentine на весь экран (дефолт 126 равноудалённых точек). Возвращает (reg, W, H)."""
     from ..gaze.normalize import robust_mean, is_saccade
     from .calibration import grid_points, wait_for_start
     W, H = screen_size()
-    cols, rows = grid or (C.CALIB_DENSE_COLS, C.CALIB_DENSE_ROWS)
-    pts = grid_points(W, H, n=(cols, rows), margin=0.10, serpentine=True)
+    if isinstance(grid, (tuple, list)) and grid and grid[0] == "auto":
+        nspec, dense, cols, rows = grid, True, 0, 0
+    else:
+        cols, rows = grid or (C.CALIB_DENSE_COLS, C.CALIB_DENSE_ROWS)
+        nspec, dense = (cols, rows), cols * rows > 16
+    mgn = float(margin) if margin is not None else (
+        C.CALIB_MARGIN_DENSE if dense else C.CALIB_MARGIN_SPARSE)
+    pts = grid_points(W, H, n=nspec, margin=mgn, serpentine=True)
     dwell = float(dwell_s) if dwell_s else (
         C.CALIBDWELL_DENSE_S if len(pts) > 16 else C.CALIBDWELL_S)
     avg_window = float(avg_s) if avg_s else float(C.CALIB_AVG_S)
@@ -74,8 +80,10 @@ def fullscreen_calibrate(cam, tracker, filt, tracker_name="facemesh", avg_s=None
     cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     if wait:
         total = len(pts) * (dwell + 0.3)
+        is_auto = isinstance(nspec, (tuple, list)) and bool(nspec) and nspec[0] == "auto"
+        grid_label = f"{nspec[1]} ravnoud." if is_auto else f"{cols}x{rows}"
         try:
-            wait_for_start(win, [f"Tochek: {len(pts)} ({cols}x{rows}), ~{total:.0f} sek.",
+            wait_for_start(win, [f"Tochek: {len(pts)} ({grid_label}), ~{total:.0f} sek.",
                                  "Syad 60sm, smotri na krasnuyu tochku.",
                                  "PROBEL/klik — nachat, Esc — otmena."], w=W, h=H)
         except KeyboardInterrupt:
@@ -115,10 +123,11 @@ def fullscreen_calibrate(cam, tracker, filt, tracker_name="facemesh", avg_s=None
                     prev = None
                 canvas = np.zeros((H, W, 3), np.uint8)
                 if now < t_settle:
-                    cv2.circle(canvas, (int(sx), int(sy)), 30, (0, 165, 255), 4)
+                    cv2.circle(canvas, (int(sx), int(sy)), 18, (0, 165, 255), 3)
                 else:
-                    cv2.circle(canvas, (int(sx), int(sy)), 22, (0, 0, 255), -1)
-                    cv2.circle(canvas, (int(sx), int(sy)), 30, (255, 255, 255), 3)
+                    # маленькая точка (r=12): точнее фиксация взгляда
+                    cv2.circle(canvas, (int(sx), int(sy)), 12, (0, 0, 255), -1)
+                    cv2.circle(canvas, (int(sx), int(sy)), 18, (255, 255, 255), 2)
                 remain = max(0.0, t_end - now)
                 cv2.putText(canvas, f"{i+1}/{len(pts)} smotri {remain:.1f}s det {n_ok}/{max(1,n_total)} cut {n_cut}",
                             (60, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)

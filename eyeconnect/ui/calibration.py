@@ -12,7 +12,10 @@ from ..gaze.normalize import robust_mean, is_saccade
 
 
 def grid_points(w, h, n=C.CALIB_GRID, margin: float = 0.12, serpentine: bool = True):
-    """Сетка точек. n: int (n x n) или (cols, rows) — например (10, 5) = 50 точек."""
+    """Сетка точек. n: int (n x n), (cols, rows) или ("auto", N) — N точек с
+    РАВНЫМИ интервалами по X и Y (блок центрируется, см. auto_grid)."""
+    if isinstance(n, (tuple, list)) and n and n[0] == "auto":
+        return auto_grid(w, h, int(n[1]), margin=margin, serpentine=serpentine)
     if isinstance(n, (tuple, list)):
         cols, rows = max(2, int(n[0])), max(2, int(n[1]))
     else:
@@ -24,6 +27,44 @@ def grid_points(w, h, n=C.CALIB_GRID, margin: float = 0.12, serpentine: bool = T
         row = xs if (r % 2 == 0 or not serpentine) else xs[::-1]
         for x in row:
             pts.append((float(x), float(y)))
+    return pts
+
+
+def auto_grid(w, h, n_total, margin=0.035, serpentine=True):
+    """~N точек, все соседние равноудалены: шаг s одинаковый по X и Y.
+    Перебираем cols x rows (от n до n+12 точек) и берём вариант с минимальным
+    максимальным отступом от рамки — точки достают до самых краёв.
+    Шаг s = min(sx, sy), блок центрируем. Возвращает список (x, y)."""
+    aspect = w / h
+    best = None
+    for cols in range(2, 41):
+        for rows in range(2, 41):
+            total = cols * rows
+            if total < n_total or total > n_total + 12:
+                continue
+            sx = (w * (1 - 2 * margin)) / (cols - 1)
+            sy = (h * (1 - 2 * margin)) / (rows - 1)
+            s = min(sx, sy)
+            xm = (w - s * (cols - 1)) / 2 / w
+            ym = (h - s * (rows - 1)) / 2 / h
+            cost = (max(xm, ym),
+                    abs((cols - 1) / (rows - 1) - aspect) / aspect,
+                    total)
+            if best is None or cost < best[0]:
+                best = (cost, cols, rows)
+    _, cols, rows = best
+    sx = (w * (1 - 2 * margin)) / (cols - 1)
+    sy = (h * (1 - 2 * margin)) / (rows - 1)
+    s = min(sx, sy)
+    x0 = (w - s * (cols - 1)) / 2
+    y0 = (h - s * (rows - 1)) / 2
+    pts = []
+    for r in range(rows):
+        xs = [x0 + c * s for c in range(cols)]
+        if serpentine and r % 2:
+            xs = xs[::-1]
+        for x in xs:
+            pts.append((float(x), float(y0 + r * s)))
     return pts
 
 
@@ -57,13 +98,23 @@ def wait_for_start(win, lines, w=640, h=200):
 
 
 def run_calibration(cam, tracker, filt, screen_w=1280, screen_h=720, avg_s=None,
-                    grid=None, dwell_s=None, wait=True):
+                    grid=None, dwell_s=None, wait=True, margin=None):
     """Интерактив: смотри на точку. Возвращает (feats, screens).
     Внутри: settle-игнор, резка саккад, robust-mean, сырые сэмплы в .npz для анализа.
-    grid: (cols, rows), дефолт плотная 10x5=50. dwell_s: фиксация на точку
-      (дефолт 1.5с для плотной / 3.0с для 3x3). wait: стартовый экран с кнопкой."""
-    cols, rows = grid or (C.CALIB_DENSE_COLS, C.CALIB_DENSE_ROWS)
-    pts = grid_points(screen_w, screen_h, n=(cols, rows), serpentine=True)
+    grid: (cols, rows) | ("auto", N) — N равноудалённых точек; дефолт auto-120.
+      dwell_s: фиксация на точку (дефолт 1.5с для плотной / 3.0с для 3x3).
+      margin: отступ крайних точек от рамки (доля); дефолт 0.035 для плотной
+      (точки почти у краёв), 0.12 для 3x3. wait: стартовый экран с кнопкой."""
+    if isinstance(grid, (tuple, list)) and grid and grid[0] == "auto":
+        cols = rows = 0
+        dense = True
+    else:
+        cols, rows = grid or (C.CALIB_DENSE_COLS, C.CALIB_DENSE_ROWS)
+        dense = cols * rows > 16
+    mgn = float(margin) if margin is not None else (
+        C.CALIB_MARGIN_DENSE if dense else C.CALIB_MARGIN_SPARSE)
+    nspec = grid if (isinstance(grid, (tuple, list)) and bool(grid) and grid[0] == "auto") else (cols, rows)
+    pts = grid_points(screen_w, screen_h, n=nspec, margin=mgn, serpentine=True)
     dwell = float(dwell_s) if dwell_s else (
         C.CALIBDWELL_DENSE_S if len(pts) > 16 else C.CALIBDWELL_S)
     feats, screens = [], []
@@ -74,9 +125,11 @@ def run_calibration(cam, tracker, filt, screen_w=1280, screen_h=720, avg_s=None,
     cv2.resizeWindow(win, screen_w // 2, screen_h // 2)
     if wait:
         total = len(pts) * (dwell + 0.3)
+        is_auto = isinstance(nspec, (tuple, list)) and bool(nspec) and nspec[0] == "auto"
+        grid_label = f"{nspec[1]} равноуд." if is_auto else f"{cols}x{rows}"
         try:
             wait_for_start(win, [
-                f"Точек: {len(pts)} ({cols}x{rows}), ~{total:.0f} сек.",
+                f"Точек: {len(pts)} ({grid_label}), ~{total:.0f} сек.",
                 "Сядь 60см, смотри на красную точку.",
                 "ПРОБЕЛ/клик — начать, Q — отмена.",
             ], w=screen_w // 2, h=200)
@@ -125,9 +178,10 @@ def run_calibration(cam, tracker, filt, screen_w=1280, screen_h=720, avg_s=None,
                 cx, cy = int(sx / 2), int(sy / 2)
                 if phase_settle:
                     # кольцо — идёт саккада, данные не пишем (Hannibal delay)
-                    cv2.circle(canvas, (cx, cy), 22, (0, 165, 255), 3)
+                    cv2.circle(canvas, (cx, cy), 14, (0, 165, 255), 2)
                 else:
-                    cv2.circle(canvas, (cx, cy), 18, (0, 0, 255), -1)
+                    # маленькая точка (r=9): точнее фиксация взгляда
+                    cv2.circle(canvas, (cx, cy), 9, (0, 0, 255), -1)
                 cv2.putText(canvas, f"{i+1}/{len(pts)} смотри {remain:.1f}c det {n_ok}/{max(1,n_total)} cut {n_cut}", (20, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 cv2.imshow(win, canvas)

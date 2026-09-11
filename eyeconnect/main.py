@@ -31,30 +31,36 @@ def profile_path(name="gaze.npz"):
 
 
 def make_tracker(name="l2cs"):
-    """Фабрика трекеров: l2cs (точный, pitch/yaw) | facemesh (лёгкий 2D)."""
+    """Фабрика трекеров: unigaze (ViT-H, самый точный) | l2cs (точный, pitch/yaw) | facemesh (лёгкий 2D)."""
+    if name == "unigaze":
+        from .gaze.unigaze_backend import UniGazeTracker
+        print("Загрузка UniGaze ViT-H (веса ~2.5ГБ + прогрев CUDA)...", flush=True)
+        return UniGazeTracker()
     if name == "l2cs":
         from .gaze.l2cs_backend import L2CSTracker
+        print("Загрузка L2CS (веса 96МБ + прогрев CUDA)...", flush=True)
         return L2CSTracker()
     from .gaze.facemesh import FaceTracker
     return FaceTracker()
 
 
 def parse_grid(s):
-    """'10x5'/'3x3'/'9' -> (cols, rows)."""
+    """'10x5'/'3x3' -> (cols, rows); '120' -> ('auto', 120): 120 равноудалённых
+    точек (сетка подбирается под aspect экрана)."""
     s = str(s).strip().lower().replace("х", "x")
     if "x" in s:
         c, r = s.split("x", 1)
         return (max(2, int(c)), max(2, int(r)))
-    n = max(2, int(s))
-    return (n, n)
+    n = max(4, int(s))
+    return ("auto", n)
 
 
 def calib_params(args):
     """Общая связка (grid, dwell, avg) для calibrate/cursor."""
     grid = parse_grid(args.grid)
-    n_pts = grid[0] * grid[1]
+    n_pts = grid[1] if grid[0] == "auto" else grid[0] * grid[1]
     dwell = float(args.calib_dwell) if args.calib_dwell else None
-    avg_s = 1.0 if args.tracker == "l2cs" else None
+    avg_s = 1.0 if args.tracker in ("l2cs", "unigaze") else None
     return grid, dwell, avg_s, n_pts
 
 
@@ -306,13 +312,13 @@ def main():
     ap.add_argument("--no-syscursor", action="store_true", help="не двигать системный курсор")
     ap.add_argument("--click", action="store_true", help="dwell-клик в cursor-режиме (фиксация 1.2с)")
     ap.add_argument("--click-dwell", type=int, default=1200, help="dwell для клика, мс")
-    ap.add_argument("--tracker", choices=["l2cs", "facemesh"], default="l2cs",
-                    help="трекер взгляда: l2cs (точный, torch) | facemesh (лёгкий)")
+    ap.add_argument("--tracker", choices=["unigaze", "l2cs", "facemesh"], default="unigaze",
+                    help="трекер взгляда: unigaze (ViT-H, самый точный) | l2cs (точный, torch) | facemesh (лёгкий)")
     ap.add_argument("--windowed", action="store_true", help="клавиатура в окне, а не на весь экран")
     ap.add_argument("--no-overlay", action="store_true",
                     help="cursor-режим: без чёрного fullscreen, просто мышь + маленькое окно статуса")
-    ap.add_argument("--grid", default="10x5",
-                    help="сетка калибровки: 10x5 (=50 точек, дефолт) | 3x3 (=9, быстро)")
+    ap.add_argument("--grid", default="120",
+                    help="сетка калибровки: 120 (=120 равноудалённых точек, дефолт) | 10x10 | 3x3 (=9, быстро)")
     ap.add_argument("--calib-dwell", type=float, default=None,
                     help="фиксация на точку, сек (дефолт 1.5 для плотной / 3.0 для 3x3)")
     ap.add_argument("--no-wait", action="store_true",
